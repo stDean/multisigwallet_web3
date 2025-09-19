@@ -9,39 +9,122 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
  * @title Multi-signature Wallet
  * @dev A contract that requires multiple approvals for transactions
  * @notice Allows a group of owners to collectively manage funds with enhanced security
+ * @custom:security-contact security@example.com
  */
 contract MultiSigWallet is ReentrancyGuard {
     using SafeERC20 for IERC20;
+
+    /**
+     * @dev Transaction structure to store transaction details
+     * @param to Destination address of the transaction
+     * @param value Amount of ETH to transfer
+     * @param data Calldata for the transaction
+     * @param executed Boolean indicating if the transaction has been executed
+     * @param description Human-readable description of the transaction
+     * @param confirmations Number of confirmations received for this transaction
+     */
+    struct Transaction {
+        address to;
+        uint96 value; // Reduced from uint256 to save gas (supports up to 79 billion ETH)
+        bytes data;
+        bool executed;
+        string description;
+        uint16 confirmations; // Reduced from uint256 (supports up to 65,535 confirmations)
+    }
 
     // State variables
     address[] private s_owners;
     mapping(address => bool) private s_isOwner;
     uint256 private immutable i_threshold;
     uint256 private s_transactionCount;
-    uint256 private s_requiredConfirmations;
+    // Removed s_requiredConfirmations as it's redundant with i_threshold
+    // Removed s_executionNonce as it's not used in the current implementation
 
-    // ERRORS
+    // Mappings
+    mapping(uint256 => Transaction) private s_transactions;
+    mapping(uint256 => mapping(address => bool)) private s_isConfirmed;
+
+    // Events
+    /**
+     * @notice Emitted when a new transaction is submitted
+     * @param txId ID of the submitted transaction
+     * @param sender Address that submitted the transaction
+     * @param to Destination address of the transaction
+     * @param value Amount of ETH to transfer
+     * @param data Calldata for the transaction
+     * @param description Human-readable description of the transaction
+     */
+    event SubmitTransaction(
+        uint256 indexed txId, address indexed sender, address indexed to, uint256 value, bytes data, string description
+    );
 
     /**
-     * @dev Error thrown when no owners are provided during initialization
+     * @notice Emitted when a transaction is confirmed by an owner
+     * @param txId ID of the confirmed transaction
+     * @param sender Address that confirmed the transaction
      */
+    event ConfirmTransaction(uint256 indexed txId, address indexed sender);
+
+    // Errors
+    /// @dev Error thrown when no owners are provided during initialization
     error MultiSigWallet__OwnersRequired();
 
-    /**
-     * @dev Error thrown when an invalid threshold is provided
-     * @notice Threshold must be at least 1 and cannot exceed the number of owners
-     */
+    /// @dev Error thrown when an invalid threshold is provided
     error MultiSigWallet__InvalidThreshold();
 
-    /**
-     * @dev Error thrown when a zero address is provided as an owner
-     */
+    /// @dev Error thrown when a zero address is provided as an owner
     error MultiSigWallet__InvalidOwner();
 
-    /**
-     * @dev Error thrown when duplicate owners are provided
-     */
+    /// @dev Error thrown when duplicate owners are provided
     error MultiSigWallet__OwnerNotUnique();
+
+    /// @dev Error thrown when a zero address is provided as a transaction target
+    error MultiSigWallet__InvalidTargetAddress();
+
+    /// @dev Error thrown when a non-owner tries to perform an owner-only operation
+    error MultiSigWallet__CallerNotAOwner();
+
+    /// @dev Error thrown when a transaction does not exist
+    error MultiSigWallet__TransactionDoesNotExist();
+
+    /// @dev Error thrown when a transaction has been executer
+    error MultiSigWallet__TransactionAlreadyExecuted();
+
+    /// @dev Error thrown when a transaction has been confirmed by a owner
+    error MultiSigWallet__TransactionAlreadyConfirmedByThisOwner();
+
+    // Modifiers
+    /**
+     * @dev Modifier to restrict access to owners only
+     */
+    modifier onlyOwners() {
+        if (!s_isOwner[msg.sender]) revert MultiSigWallet__CallerNotAOwner();
+        _;
+    }
+
+    /**
+     * @dev Modifier to check if a transaction exists
+     * @param _txId ID of the transaction to check
+     */
+    modifier toExist(uint256 _txId) {
+        if (_txId >= s_transactionCount) revert MultiSigWallet__TransactionDoesNotExist();
+        _;
+    }
+
+    /**
+     * @dev Modifier to check if a transaction is not executed
+     * @param _txId ID of the transaction
+     */
+    modifier notExecuted(uint256 _txId) {
+        // Check if already executed
+        if (s_transactions[_txId].executed) revert MultiSigWallet__TransactionAlreadyExecuted();
+        _;
+    }
+
+    modifier notConfirmed(uint256 _txId) {
+        if (s_isConfirmed[_txId][msg.sender]) revert MultiSigWallet__TransactionAlreadyConfirmedByThisOwner();
+        _;
+    }
 
     /**
      * @notice Initialize the multisig wallet with owners and threshold
@@ -68,6 +151,64 @@ contract MultiSigWallet is ReentrancyGuard {
         }
 
         i_threshold = _threshold;
+    }
+
+    // MAIN FUNCTIONS
+
+    /**
+     * @notice Submit a new transaction for approval
+     * @dev Creates a new transaction that requires multisig approval
+     * @param _to Target address for the transaction
+     * @param _value ETH value to send with the transaction
+     * @param _data Calldata for the transaction
+     * @param _description Description of the transaction for clarity
+     * @return txId ID of the newly created transaction
+     * @custom:reverts MultiSigWallet__InvalidTargetAddress if _to is address(0)
+     */
+    function submitTransaction(address _to, uint96 _value, bytes memory _data, string memory _description)
+        public
+        onlyOwners
+        returns (uint256 txId)
+    {
+        if (_to == address(0)) revert MultiSigWallet__InvalidTargetAddress();
+
+        txId = s_transactionCount;
+        s_transactions[txId] = Transaction({
+            to: _to,
+            data: _data,
+            confirmations: 0,
+            executed: false,
+            description: _description,
+            value: _value
+        });
+
+        s_transactionCount += 1;
+
+        emit SubmitTransaction(txId, msg.sender, _to, _value, _data, _description);
+
+        // Auto-confirm by the submitter
+        confirmTransaction(txId);
+    }
+
+    /**
+     * @notice Confirm a transaction
+     * @dev Allows an owner to confirm a pending transaction
+     * @param _txId ID of the transaction to confirm
+     * @custom:reverts MultiSigWallet__TransactionDoesNotExist if transaction doesn't exist
+     */
+    function confirmTransaction(uint256 _txId)
+        public
+        onlyOwners
+        toExist(_txId)
+        notExecuted(_txId)
+        notConfirmed(_txId)
+    {
+        Transaction storage transaction = s_transactions[_txId];
+
+        s_isConfirmed[_txId][msg.sender] = true;
+        transaction.confirmations += 1;
+
+        emit ConfirmTransaction(_txId, msg.sender);
     }
 
     // GETTER FUNCTIONS AND HELPERS
@@ -98,5 +239,37 @@ contract MultiSigWallet is ReentrancyGuard {
      */
     function getIsWalletOwner(address _owner) external view returns (bool) {
         return s_isOwner[_owner];
+    }
+
+    /**
+     * @notice Get the total number of transactions
+     * @dev Returns the count of all transactions submitted to this wallet
+     * @return Total number of transactions
+     */
+    function getTransactionCount() external view returns (uint256) {
+        return s_transactionCount;
+    }
+
+    /**
+     * @notice Get transaction details by ID
+     * @dev Returns the transaction structure for a given transaction ID
+     * @param _txId ID of the transaction to retrieve
+     * @return Transaction details
+     * @custom:reverts MultiSigWallet__TransactionDoesNotExist if transaction doesn't exist
+     */
+    function getTransactions(uint256 _txId) external view toExist(_txId) returns (Transaction memory) {
+        return s_transactions[_txId];
+    }
+
+    /**
+     * @notice Check if a user has confirmed a transaction
+     * @dev Returns whether a specific user has confirmed a specific transaction
+     * @param _txId ID of the transaction to check
+     * @param _user Address of the user to check
+     * @return True if the user has confirmed the transaction, false otherwise
+     * @custom:reverts MultiSigWallet__TransactionDoesNotExist if transaction doesn't exist
+     */
+    function getIsConfirmed(uint256 _txId, address _user) external view toExist(_txId) returns (bool) {
+        return s_isConfirmed[_txId][_user];
     }
 }

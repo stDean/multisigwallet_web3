@@ -13,18 +13,26 @@ import {MultiSigWallet} from "src/MultiSigWallet.sol";
 contract MultiSigWalletTest is Test {
     /// @dev Instance of the deployer contract
     DeployMultiSigWallet public deployer;
-    
+
     /// @dev Instance of the MultiSigWallet contract under test
     MultiSigWallet public wallet;
-    
+
     /// @dev Instance of the helper configuration contract
     HelperConfig public helperConfig;
-    
+
     /// @dev Network configuration for the current test environment
     HelperConfig.NetworkConfig public config;
-    
+
     /// @dev A non-owner address for testing access control
     address nonOwner = makeAddr("nonOwner");
+
+    /// @dev Test recipient address for transactions
+    address recipient = makeAddr("recipient");
+
+    /// @dev Test transaction parameters
+    uint96 testValue = 1 ether;
+    bytes testData = hex"1234";
+    string testDescription = "Test transaction";
 
     /**
      * @notice Set up the test environment before each test
@@ -158,5 +166,61 @@ contract MultiSigWalletTest is Test {
         assertEq(config.threshold, 2);
         assertTrue(config.owners[0] != address(0));
         assertTrue(config.owners[1] != address(0));
+    }
+
+    // SUBMIT TRANSACTION TESTS
+
+    /**
+     * @notice Test that an owner can submit a transaction
+     * @dev Verifies that an owner can successfully submit a transaction
+     */
+    function test_SubmitTransactionByOwner() public {
+        // Use the first owner from config
+        address owner = config.owners[0];
+
+        vm.prank(owner);
+        uint256 txId = wallet.submitTransaction(recipient, testValue, testData, testDescription);
+
+        // Verify transaction was created
+        assertEq(txId, 0);
+        assertEq(wallet.getTransactionCount(), 1);
+
+        // Verify transaction details
+        MultiSigWallet.Transaction memory transaction = wallet.getTransactions(txId);
+        assertEq(transaction.to, recipient);
+        assertEq(transaction.value, testValue);
+        assertEq(transaction.data, testData);
+        assertEq(transaction.description, testDescription);
+        assertEq(transaction.executed, false);
+        assertEq(transaction.confirmations, 1); // Auto-confirmed by submitter
+    }
+
+    /**
+     * @notice Test that submitTransaction emits SubmitTransaction event
+     * @dev Verifies that the SubmitTransaction event is emitted with correct parameters
+     */
+    function test_SubmitTransactionEmitsEvent() public {
+        address owner = config.owners[0];
+
+        vm.expectEmit(true, true, true, true);
+        emit MultiSigWallet.SubmitTransaction(0, owner, recipient, testValue, testData, testDescription);
+
+        vm.prank(owner);
+        wallet.submitTransaction(recipient, testValue, testData, testDescription);
+    }
+
+    /**
+     * @notice Test that submitTransaction auto-confirms by the submitter
+     * @dev Verifies that the transaction submitter automatically confirms the transaction
+     */
+    function test_SubmitTransactionAutoConfirms() public {
+        address owner = config.owners[0];
+
+        vm.prank(owner);
+        uint256 txId = wallet.submitTransaction(recipient, testValue, testData, testDescription);
+
+        // Verify the submitter has confirmed
+        assertTrue(wallet.getIsConfirmed(txId, owner));
+        assertEq(wallet.getTransactions(txId).confirmations, 1);
     }
 }
