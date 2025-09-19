@@ -43,6 +43,7 @@ contract MultiSigWallet is ReentrancyGuard {
     // Mappings
     mapping(uint256 => Transaction) private s_transactions;
     mapping(uint256 => mapping(address => bool)) private s_isConfirmed;
+    mapping(address => uint256) public s_executionNonce;
 
     // Events
     /**
@@ -64,6 +65,19 @@ contract MultiSigWallet is ReentrancyGuard {
      * @param sender Address that confirmed the transaction
      */
     event ConfirmTransaction(uint256 indexed txId, address indexed sender);
+
+    /**
+     * @notice Emitted when a transaction execution
+     * @param txId ID of the confirmed transaction
+     * @param sender Address that confirmed the transaction
+     */
+    event ExecuteTransaction(uint256 indexed txId, address indexed sender);
+    /**
+     * @notice Emitted when a transaction execution is successful
+     * @param txId ID of the confirmed transaction
+     * @param sender Address that confirmed the transaction
+     */
+    event ExecuteTransactionSuccess(uint256 indexed txId, address indexed sender);
 
     // Errors
     /// @dev Error thrown when no owners are provided during initialization
@@ -93,6 +107,12 @@ contract MultiSigWallet is ReentrancyGuard {
     /// @dev Error thrown when a transaction has been confirmed by a owner
     error MultiSigWallet__TransactionAlreadyConfirmedByThisOwner();
 
+    /// @dev Error thrown when a transaction confirmations is less than or equal to threshold
+    error MultiSigWallet__CannotExecuteTransactionWithoutEnoughConfirmations();
+
+    /// @dev Error thrown when a transaction execution fails
+    error MultiSigWallet__TransactionExecutionFailed();
+
     // Modifiers
     /**
      * @dev Modifier to restrict access to owners only
@@ -106,7 +126,7 @@ contract MultiSigWallet is ReentrancyGuard {
      * @dev Modifier to check if a transaction exists
      * @param _txId ID of the transaction to check
      */
-    modifier toExist(uint256 _txId) {
+    modifier txExists(uint256 _txId) {
         if (_txId >= s_transactionCount) revert MultiSigWallet__TransactionDoesNotExist();
         _;
     }
@@ -199,7 +219,7 @@ contract MultiSigWallet is ReentrancyGuard {
     function confirmTransaction(uint256 _txId)
         public
         onlyOwners
-        toExist(_txId)
+        txExists(_txId)
         notExecuted(_txId)
         notConfirmed(_txId)
     {
@@ -209,6 +229,39 @@ contract MultiSigWallet is ReentrancyGuard {
         transaction.confirmations += 1;
 
         emit ConfirmTransaction(_txId, msg.sender);
+    }
+
+    /**
+     * @notice Execute a confirmed transaction
+     * @dev Executes a transaction once it has enough confirmations. Only owners can execute.
+     * @param _txId ID of the transaction to execute
+     * @custom:reverts MultiSigWallet__CannotExecuteTransactionWithoutEnoughConfirmations if confirmations < threshold
+     * @custom:reverts MultiSigWallet__TransactionExecutionFailed if the external call fails
+     * @custom:emits ExecuteTransaction on successful execution
+     * @custom:emits ExecuteTransactionSuccess on successful external call
+     */
+    function executeTransaction(uint256 _txId) public nonReentrant onlyOwners txExists(_txId) notExecuted(_txId) {
+        Transaction storage transaction = s_transactions[_txId];
+        if (transaction.confirmations < i_threshold) {
+            revert MultiSigWallet__CannotExecuteTransactionWithoutEnoughConfirmations();
+        }
+
+        transaction.executed = true;
+        s_executionNonce[msg.sender] += 1;
+
+        // Execute the transaction
+        (bool success,) = transaction.to.call{value: transaction.value}(transaction.data);
+
+        if (success) {
+            emit ExecuteTransactionSuccess(_txId, msg.sender);
+        } else {
+            // Mark as not executed to allow retry
+            transaction.executed = false;
+
+            revert MultiSigWallet__TransactionExecutionFailed();
+        }
+
+        emit ExecuteTransaction(_txId, msg.sender);
     }
 
     // GETTER FUNCTIONS AND HELPERS
@@ -257,7 +310,7 @@ contract MultiSigWallet is ReentrancyGuard {
      * @return Transaction details
      * @custom:reverts MultiSigWallet__TransactionDoesNotExist if transaction doesn't exist
      */
-    function getTransactions(uint256 _txId) external view toExist(_txId) returns (Transaction memory) {
+    function getTransactions(uint256 _txId) external view txExists(_txId) returns (Transaction memory) {
         return s_transactions[_txId];
     }
 
@@ -269,7 +322,7 @@ contract MultiSigWallet is ReentrancyGuard {
      * @return True if the user has confirmed the transaction, false otherwise
      * @custom:reverts MultiSigWallet__TransactionDoesNotExist if transaction doesn't exist
      */
-    function getIsConfirmed(uint256 _txId, address _user) external view toExist(_txId) returns (bool) {
+    function getIsConfirmed(uint256 _txId, address _user) external view txExists(_txId) returns (bool) {
         return s_isConfirmed[_txId][_user];
     }
 }
