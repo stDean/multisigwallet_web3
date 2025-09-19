@@ -56,9 +56,10 @@ contract HelperConfig is Script {
      * @return NetworkConfig Sepolia network configuration
      */
     function getSepoliaNetworkConfig() internal pure returns (NetworkConfig memory) {
-        address[] memory owners = new address[](2);
+        address[] memory owners = new address[](3);
         owners[0] = 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266;
         owners[1] = 0x17d4351aE801b0619ef914756A0423A83f10Af60;
+        owners[2] = 0xD949A648cc5a2eFa98f9369ACa2FE6e74D79e02E;
 
         return NetworkConfig({owners: owners, threshold: 2});
     }
@@ -69,11 +70,10 @@ contract HelperConfig is Script {
      * @return NetworkConfig Anvil network configuration
      */
     function getOrCreateAnvilNetworkConfig() internal returns (NetworkConfig memory) {
-        if (activeNetworkConfig.owners[0] == address(0)) return activeNetworkConfig;
-
-        address[] memory owners = new address[](2);
+        address[] memory owners = new address[](3);
         owners[0] = 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266;
         owners[1] = 0x70997970C51812dc3A010C7d01b50e0d17dc79C8;
+        owners[2] = 0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC;
 
         activeNetworkConfig = NetworkConfig({owners: owners, threshold: 2});
 

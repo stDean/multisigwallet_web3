@@ -20,20 +20,40 @@ contract MultiSigWallet is ReentrancyGuard {
     uint256 private s_transactionCount;
     uint256 private s_requiredConfirmations;
 
+    // ERRORS
+    error MultiSigWallet__OwnersRequired();
+    error MultiSigWallet__InvalidThreshold();
+    error MultiSigWallet__InvalidOwner();
+    error MultiSigWallet__OwnerNotUnique();
+
     constructor(address[] memory _owners, uint256 _threshold) {
-        require(_owners.length >= 1, "MultiSig: owners required");
-        require(_threshold >= 1 && _threshold <= _owners.length, "MultiSig: invalid threshold");
+        if (_owners.length < 2) revert MultiSigWallet__OwnersRequired();
+        if (_threshold < 1 || _threshold > _owners.length) revert MultiSigWallet__InvalidThreshold();
 
         for (uint256 i = 0; i < _owners.length; i++) {
             address owner = _owners[i];
 
-            require(owner != address(0), "MultiSig: invalid owner");
-            require(!s_isOwner[owner], "MultiSig: owner not unique");
+            if (owner == address(0)) revert MultiSigWallet__InvalidOwner();
+            if (s_isOwner[owner]) revert MultiSigWallet__OwnerNotUnique();
 
             s_isOwner[owner] = true;
             s_owners.push(owner);
         }
 
         i_threshold = _threshold;
+    }
+
+    // GETTER FUNCTIONS AND HELPERS
+
+    function getOwners() external view returns (address[] memory) {
+        return s_owners;
+    }
+
+    function getThreshold() external view returns (uint256) {
+        return i_threshold;
+    }
+
+    function isWalletOwner(address _owner) external view returns (bool) {
+        return s_isOwner[_owner];
     }
 }
