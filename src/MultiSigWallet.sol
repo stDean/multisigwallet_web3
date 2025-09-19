@@ -325,4 +325,14 @@ contract MultiSigWallet is ReentrancyGuard {
     function getIsConfirmed(uint256 _txId, address _user) external view txExists(_txId) returns (bool) {
         return s_isConfirmed[_txId][_user];
     }
+
+    /**
+     * @notice Get execution nonce
+     * @dev Returns the nonce
+     * @param _executor address of the executor
+     * @return Nonce
+     */
+    function getExecutionNonce(address _executor) external view returns (uint256) {
+        return s_executionNonce[_executor];
+    }
 }

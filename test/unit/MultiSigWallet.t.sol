@@ -5,6 +5,13 @@ import {Test, console} from "forge-std/Test.sol";
 import {DeployMultiSigWallet, HelperConfig} from "script/DeployMultiSigWallet.s.sol";
 import {MultiSigWallet} from "src/MultiSigWallet.sol";
 
+// Helper contract for testing failed external calls
+contract RevertingContract {
+    fallback() external payable {
+        revert("RevertingContract: Always reverts");
+    }
+}
+
 /**
  * @title MultiSigWalletTest
  * @dev Comprehensive test suite for MultiSigWallet contract
@@ -42,6 +49,12 @@ contract MultiSigWalletTest is Test {
         deployer = new DeployMultiSigWallet();
         (wallet, helperConfig) = deployer.run();
         config = helperConfig.getConfig();
+    }
+
+    modifier fundWallet() {
+        vm.deal(address(wallet), testValue);
+
+        _;
     }
 
     // CONSTRUCTION TESTS
@@ -340,13 +353,10 @@ contract MultiSigWalletTest is Test {
      * @notice Test that confirmTransaction reverts when transaction is already executed
      * @dev Verifies that confirming an executed transaction reverts
      */
-    function test_ConfirmTransactionRevertsWhenAlreadyExecuted() public {
+    function test_ConfirmTransactionRevertsWhenAlreadyExecuted() public fundWallet {
         address submitter = config.owners[0];
         address confirmer = config.owners[1];
         address executor = config.owners[2];
-
-        // Fund the wallet with ETH before submitting transaction
-        vm.deal(address(wallet), testValue);
 
         // Submit a transaction
         vm.prank(submitter);
@@ -425,4 +435,200 @@ contract MultiSigWalletTest is Test {
     }
 
     // EXECUTE TRANSACTION TESTS
+
+    /**
+     * @notice Test that an owner can execute a transaction with enough confirmations
+     * @dev Verifies that an owner can successfully execute a transaction with sufficient confirmations
+     */
+    function test_ExecuteTransactionWithEnoughConfirmations() public fundWallet {
+        address submitter = config.owners[0];
+        address confirmer = config.owners[1];
+        address executor = config.owners[2];
+
+        // Submit a transaction
+        vm.prank(submitter);
+        uint256 txId = wallet.submitTransaction(recipient, testValue, testData, testDescription);
+
+        // Confirm by enough owners to meet threshold
+        vm.prank(confirmer);
+        wallet.confirmTransaction(txId);
+
+        // Execute the transaction
+        uint256 initialRecipientBalance = recipient.balance;
+        uint256 initialWalletBalance = address(wallet).balance;
+
+        vm.prank(executor);
+        wallet.executeTransaction(txId);
+
+        // Verify execution
+        assertEq(recipient.balance - initialRecipientBalance, testValue);
+        assertEq(initialWalletBalance - address(wallet).balance, testValue);
+        assertTrue(wallet.getTransactions(txId).executed);
+    }
+
+    /**
+     * @notice Test that executeTransaction emits events correctly
+     * @dev Verifies that ExecuteTransaction and ExecuteTransactionSuccess events are emitted
+     */
+    function test_ExecuteTransactionEmitsEvents() public fundWallet {
+        address submitter = config.owners[0];
+        address confirmer = config.owners[1];
+        address executor = config.owners[2];
+
+        // Submit a transaction
+        vm.prank(submitter);
+        uint256 txId = wallet.submitTransaction(recipient, testValue, testData, testDescription);
+
+        // Confirm by enough owners to meet threshold
+        vm.prank(confirmer);
+        wallet.confirmTransaction(txId);
+
+        // Expect events
+        vm.expectEmit(true, true, false, false);
+        emit MultiSigWallet.ExecuteTransactionSuccess(txId, executor);
+
+        vm.expectEmit(true, true, false, false);
+        emit MultiSigWallet.ExecuteTransaction(txId, executor);
+
+        // Execute the transaction
+        vm.prank(executor);
+        wallet.executeTransaction(txId);
+    }
+
+    /**
+     * @notice Test that executeTransaction reverts without enough confirmations
+     * @dev Verifies that executing a transaction without sufficient confirmations reverts
+     */
+    function test_ExecuteTransactionRevertsWithoutEnoughConfirmations() public {
+        address submitter = config.owners[0];
+        address executor = config.owners[1];
+
+        // Submit a transaction (only auto-confirmed by submitter)
+        vm.prank(submitter);
+        uint256 txId = wallet.submitTransaction(recipient, testValue, testData, testDescription);
+
+        // Try to execute without enough confirmations
+        vm.expectRevert(MultiSigWallet.MultiSigWallet__CannotExecuteTransactionWithoutEnoughConfirmations.selector);
+        vm.prank(executor);
+        wallet.executeTransaction(txId);
+    }
+
+    /**
+     * @notice Test that non-owner cannot execute a transaction
+     * @dev Verifies that a non-owner cannot execute a transaction
+     */
+    function test_ExecuteTransactionRevertsWhenNotOwner() public {
+        address submitter = config.owners[0];
+        address confirmer = config.owners[1];
+
+        // Submit a transaction
+        vm.prank(submitter);
+        uint256 txId = wallet.submitTransaction(recipient, testValue, testData, testDescription);
+
+        // Confirm by enough owners to meet threshold
+        vm.prank(confirmer);
+        wallet.confirmTransaction(txId);
+
+        // Try to execute as non-owner
+        vm.expectRevert(MultiSigWallet.MultiSigWallet__CallerNotAOwner.selector);
+        vm.prank(nonOwner);
+        wallet.executeTransaction(txId);
+    }
+
+    /**
+     * @notice Test that executeTransaction reverts for non-existent transaction
+     * @dev Verifies that executing a non-existent transaction reverts
+     */
+    function test_ExecuteTransactionRevertsWhenTransactionDoesNotExist() public {
+        address executor = config.owners[0];
+
+        vm.expectRevert(MultiSigWallet.MultiSigWallet__TransactionDoesNotExist.selector);
+        vm.prank(executor);
+        wallet.executeTransaction(999); // Non-existent transaction ID
+    }
+
+    /**
+     * @notice Test that executeTransaction reverts when already executed
+     * @dev Verifies that executing an already executed transaction reverts
+     */
+    function test_ExecuteTransactionRevertsWhenAlreadyExecuted() public fundWallet {
+        address submitter = config.owners[0];
+        address confirmer = config.owners[1];
+        address executor = config.owners[2];
+
+        // Submit a transaction
+        vm.prank(submitter);
+        uint256 txId = wallet.submitTransaction(recipient, testValue, testData, testDescription);
+
+        // Confirm by enough owners to meet threshold
+        vm.prank(confirmer);
+        wallet.confirmTransaction(txId);
+
+        // Execute the transaction
+        vm.prank(executor);
+        wallet.executeTransaction(txId);
+
+        // Try to execute again
+        vm.expectRevert(MultiSigWallet.MultiSigWallet__TransactionAlreadyExecuted.selector);
+        vm.prank(executor);
+        wallet.executeTransaction(txId);
+    }
+
+    /**
+     * @notice Test that executeTransaction reverts when external call fails
+     * @dev Verifies that executing a transaction with a failing external call reverts
+     */
+    function test_ExecuteTransactionRevertsWhenExternalCallFails() public {
+        address submitter = config.owners[0];
+        address confirmer = config.owners[1];
+        address executor = config.owners[2];
+
+        // Create a contract that will revert when called
+        RevertingContract revertingContract = new RevertingContract();
+
+        // Submit a transaction to the reverting contract
+        vm.prank(submitter);
+        uint256 txId =
+            wallet.submitTransaction(address(revertingContract), testValue, hex"1234", "Call to reverting contract");
+
+        // Confirm by enough owners to meet threshold
+        vm.prank(confirmer);
+        wallet.confirmTransaction(txId);
+
+        // Try to execute (should revert)
+        vm.expectRevert(MultiSigWallet.MultiSigWallet__TransactionExecutionFailed.selector);
+        vm.prank(executor);
+        wallet.executeTransaction(txId);
+
+        // Verify transaction was not marked as executed
+        assertFalse(wallet.getTransactions(txId).executed);
+    }
+
+    /**
+     * @notice Test that executeTransaction increments execution nonce
+     * @dev Verifies that the execution nonce is incremented for the executor
+     */
+    function test_ExecuteTransactionIncrementsExecutionNonce() public fundWallet {
+        address submitter = config.owners[0];
+        address confirmer = config.owners[1];
+        address executor = config.owners[2];
+
+        // Submit a transaction
+        vm.prank(submitter);
+        uint256 txId = wallet.submitTransaction(recipient, testValue, testData, testDescription);
+
+        // Confirm by enough owners to meet threshold
+        vm.prank(confirmer);
+        wallet.confirmTransaction(txId);
+
+        // Check initial nonce
+        uint256 initialNonce = wallet.getExecutionNonce(executor);
+
+        // Execute the transaction
+        vm.prank(executor);
+        wallet.executeTransaction(txId);
+
+        // Verify nonce was incremented
+        assertEq(wallet.getExecutionNonce(executor), initialNonce + 1);
+    }
 }
