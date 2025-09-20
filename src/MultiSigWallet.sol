@@ -60,6 +60,14 @@ contract MultiSigWallet is ReentrancyGuard {
     );
 
     /**
+     * @notice Emitted when a deposit is made to the wallet
+     * @param amount Amount to be deposited
+     * @param sender Address that confirmed the transaction
+     * @param balance Balance of wallet
+     */
+    event Deposit(address indexed sender, uint256 amount, uint256 balance);
+
+    /**
      * @notice Emitted when a transaction is confirmed by an owner
      * @param txId ID of the confirmed transaction
      * @param sender Address that confirmed the transaction
@@ -67,17 +75,31 @@ contract MultiSigWallet is ReentrancyGuard {
     event ConfirmTransaction(uint256 indexed txId, address indexed sender);
 
     /**
+     * @notice Emitted when a transaction is revoked by an owner
+     * @param txId ID of the confirmed transaction
+     * @param sender Address that confirmed the transaction
+     */
+    event RevokeConfirmation(uint256 indexed txId, address indexed sender);
+
+    /**
      * @notice Emitted when a transaction execution
      * @param txId ID of the confirmed transaction
      * @param sender Address that confirmed the transaction
      */
     event ExecuteTransaction(uint256 indexed txId, address indexed sender);
+
     /**
      * @notice Emitted when a transaction execution is successful
      * @param txId ID of the confirmed transaction
      * @param sender Address that confirmed the transaction
      */
     event ExecuteTransactionSuccess(uint256 indexed txId, address indexed sender);
+
+    /**
+     * @notice Emitted when a new owner is added
+     * @param newOwner Address of new owner to be added
+     */
+    event OwnerAdded(address indexed newOwner);
 
     // Errors
     /// @dev Error thrown when no owners are provided during initialization
@@ -113,6 +135,24 @@ contract MultiSigWallet is ReentrancyGuard {
     /// @dev Error thrown when a transaction execution fails
     error MultiSigWallet__TransactionExecutionFailed();
 
+    /// @dev Error thrown when a owner has not confirmed a transaction
+    error MultiSigWallet__TransactionNotConfirmed();
+
+    /// @dev Error thrown when a zero address is provided for a new owner
+    error MultiSigWallet__InvalidOwnerAddress();
+
+    /// @dev Error thrown when owner already exist
+    error MultiSigWallet__OwnerAlreadyExist();
+
+    /// @dev Error thrown when not an owner
+    error MultiSigWallet__NotAnOwner();
+
+    /// @dev Error thrown when owner is less than or equal to one
+    error MultiSigWallet__CannotRemoveLastOwner();
+
+    /// @dev Error thrown when owner is less than or equal to one
+    error MultiSigWallet__OnlyCallableViaExecutedTransaction();
+
     // Modifiers
     /**
      * @dev Modifier to restrict access to owners only
@@ -144,6 +184,14 @@ contract MultiSigWallet is ReentrancyGuard {
     modifier notConfirmed(uint256 _txId) {
         if (s_isConfirmed[_txId][msg.sender]) revert MultiSigWallet__TransactionAlreadyConfirmedByThisOwner();
         _;
+    }
+
+    /**
+     * @notice Receive function to allow ETH deposits
+     * @dev Emits a Deposit event when ETH is received
+     */
+    receive() external payable {
+        emit Deposit(msg.sender, msg.value, address(this).balance);
     }
 
     /**
@@ -262,6 +310,77 @@ contract MultiSigWallet is ReentrancyGuard {
         }
 
         emit ExecuteTransaction(_txId, msg.sender);
+    }
+
+    /**
+     * @notice Revoke a confirmation for a transaction
+     * @dev Allows an owner to revoke their confirmation
+     * @param _txId ID of the transaction to revoke confirmation for
+     */
+    function revokeConfirmation(uint256 _txId) public onlyOwners txExists(_txId) notExecuted(_txId) {
+        if (!s_isConfirmed[_txId][msg.sender]) revert MultiSigWallet__TransactionNotConfirmed();
+
+        s_isConfirmed[_txId][msg.sender] = false;
+        s_transactions[_txId].confirmations -= 1;
+        emit RevokeConfirmation(_txId, msg.sender);
+    }
+
+    /**
+     * @notice Submit a transaction to add a new owner
+     * @dev Creates a transaction that will add a new owner when executed
+     * @param newOwner Address of the new owner to add
+     * @return txId ID of the newly created transaction
+     */
+    function submitAddOwnerTransaction(address newOwner) external returns (uint256 txId) {
+        if (newOwner == address(0)) revert MultiSigWallet__InvalidOwnerAddress();
+        if (s_isOwner[newOwner]) revert MultiSigWallet__OwnerAlreadyExist();
+
+        bytes memory data = abi.encodeWithSignature("addOwner(address)", newOwner);
+        return submitTransaction(address(this), 0, data, "Add new owner");
+    }
+
+    /**
+     * @notice Add a new owner
+     * @dev This function should be called via a multisig transaction
+     * @param newOwner Address of the new owner to add
+     */
+    function addOwner(address newOwner) external {
+        // Only allow self-call (via executed transaction)
+        if (msg.sender != address(this)) revert MultiSigWallet__OnlyCallableViaExecutedTransaction();
+        if (newOwner == address(0)) revert MultiSigWallet__InvalidOwner();
+        if (s_isOwner[newOwner]) revert MultiSigWallet__OwnerAlreadyExist();
+
+        s_isOwner[newOwner] = true;
+        s_owners.push(newOwner);
+
+        emit OwnerAdded(newOwner);
+    }
+
+    /**
+     * @notice Submit a transaction to remove an owner
+     * @dev Creates a transaction that will remove an owner when executed
+     * @param ownerToRemove Address of the owner to remove
+     * @return txId ID of the newly created transaction
+     */
+    function submitRemoveOwnerTransaction(address ownerToRemove) external returns (uint256 txId) {
+        if (!s_isOwner[ownerToRemove]) revert MultiSigWallet__NotAnOwner();
+        if (s_owners.length <= 1) revert MultiSigWallet__CannotRemoveLastOwner();
+
+        bytes memory data = abi.encodeWithSignature("removeOwner(address)", ownerToRemove);
+        return submitTransaction(address(this), 0, data, "Remove owner");
+    }
+
+    /**
+     * @notice Submit a transaction to change the threshold
+     * @dev Creates a transaction that will change the threshold when executed
+     * @param newThreshold New threshold value
+     * @return txId ID of the newly created transaction
+     */
+    function submitChangeThresholdTransaction(uint256 newThreshold) external returns (uint256 txId) {
+        if (newThreshold < 1 || newThreshold > s_owners.length) revert MultiSigWallet__InvalidThreshold();
+
+        bytes memory data = abi.encodeWithSignature("changeThreshold(uint256)", newThreshold);
+        return submitTransaction(address(this), 0, data, "Change threshold");
     }
 
     // GETTER FUNCTIONS AND HELPERS
