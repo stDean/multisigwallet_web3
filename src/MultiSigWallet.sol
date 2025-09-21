@@ -435,7 +435,7 @@ contract MultiSigWallet is ReentrancyGuard {
     }
 
     // GETTER FUNCTIONS AND HELPERS
-
+    
     /**
      * @notice Get the list of all wallet owners
      * @dev Returns an array of all addresses that are owners of this wallet
