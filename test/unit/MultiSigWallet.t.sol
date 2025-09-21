@@ -631,4 +631,121 @@ contract MultiSigWalletTest is Test {
         // Verify nonce was incremented
         assertEq(wallet.getExecutionNonce(executor), initialNonce + 1);
     }
+
+    /**
+     * @notice Test that an owner can revoke their confirmation
+     * @dev Verifies that an owner can successfully revoke their confirmation
+     */
+    function test_RevokeConfirmationByOwner() public {
+        address submitter = config.owners[0];
+        address confirmer = config.owners[1];
+
+        // Submit and confirm a transaction
+        vm.prank(submitter);
+        uint256 txId = wallet.submitTransaction(recipient, testValue, testData, testDescription);
+
+        vm.prank(confirmer);
+        wallet.confirmTransaction(txId);
+
+        // Verify confirmation exists
+        assertTrue(wallet.getIsConfirmed(txId, confirmer));
+        assertEq(wallet.getTransactions(txId).confirmations, 2);
+
+        // Revoke the confirmation
+        vm.prank(confirmer);
+        wallet.revokeConfirmation(txId);
+
+        // Verify revocation
+        assertFalse(wallet.getIsConfirmed(txId, confirmer));
+        assertEq(wallet.getTransactions(txId).confirmations, 1);
+    }
+
+    /**
+     * @notice Test that revokeConfirmation emits RevokeConfirmation event
+     * @dev Verifies that the RevokeConfirmation event is emitted with correct parameters
+     */
+    function test_RevokeConfirmationEmitsEvent() public {
+        address submitter = config.owners[0];
+        address confirmer = config.owners[1];
+
+        // Submit and confirm a transaction
+        vm.prank(submitter);
+        uint256 txId = wallet.submitTransaction(recipient, testValue, testData, testDescription);
+
+        vm.prank(confirmer);
+        wallet.confirmTransaction(txId);
+
+        // Expect the event
+        vm.expectEmit(true, true, false, false);
+        emit MultiSigWallet.RevokeConfirmation(txId, confirmer);
+
+        // Revoke the confirmation
+        vm.prank(confirmer);
+        wallet.revokeConfirmation(txId);
+    }
+
+    /**
+     * @notice Test that non-owner cannot revoke a confirmation
+     * @dev Verifies that a non-owner cannot revoke a confirmation
+     */
+    function test_RevokeConfirmationRevertsWhenNotOwner() public {
+        address submitter = config.owners[0];
+        address confirmer = config.owners[1];
+
+        // Submit and confirm a transaction
+        vm.prank(submitter);
+        uint256 txId = wallet.submitTransaction(recipient, testValue, testData, testDescription);
+
+        vm.prank(confirmer);
+        wallet.confirmTransaction(txId);
+
+        // Try to revoke as non-owner
+        vm.expectRevert(MultiSigWallet.MultiSigWallet__CallerNotAOwner.selector);
+        vm.prank(nonOwner);
+        wallet.revokeConfirmation(txId);
+    }
+
+    /**
+     * @notice Test that revokeConfirmation reverts when transaction not confirmed
+     * @dev Verifies that revoking a non-confirmed transaction reverts
+     */
+    function test_RevokeConfirmationRevertsWhenNotConfirmed() public {
+        address submitter = config.owners[0];
+        address confirmer = config.owners[1];
+
+        // Submit a transaction
+        vm.prank(submitter);
+        uint256 txId = wallet.submitTransaction(recipient, testValue, testData, testDescription);
+
+        // Try to revoke without confirming first
+        vm.expectRevert(MultiSigWallet.MultiSigWallet__TransactionNotConfirmed.selector);
+        vm.prank(confirmer);
+        wallet.revokeConfirmation(txId);
+    }
+
+    /**
+     * @notice Test that revokeConfirmation reverts when transaction is executed
+     * @dev Verifies that revoking confirmation for an executed transaction reverts
+     */
+    function test_RevokeConfirmationRevertsWhenExecuted() public fundWallet {
+        address submitter = config.owners[0];
+        address confirmer = config.owners[1];
+        address executor = config.owners[2];
+
+        // Submit and confirm a transaction
+        vm.prank(submitter);
+        uint256 txId = wallet.submitTransaction(recipient, testValue, testData, testDescription);
+
+        vm.prank(confirmer);
+        wallet.confirmTransaction(txId);
+
+        // Execute the transaction
+        vm.prank(executor);
+        wallet.executeTransaction(txId);
+
+        // Try to revoke after execution
+        vm.expectRevert(MultiSigWallet.MultiSigWallet__TransactionAlreadyExecuted.selector);
+        vm.prank(confirmer);
+        wallet.revokeConfirmation(txId);
+    }
 }
