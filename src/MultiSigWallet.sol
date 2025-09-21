@@ -24,12 +24,12 @@ contract MultiSigWallet is ReentrancyGuard {
      * @param confirmations Number of confirmations received for this transaction
      */
     struct Transaction {
-        address to;
-        uint96 value; // Reduced from uint256 to save gas (supports up to 79 billion ETH)
-        bytes data;
-        bool executed;
-        string description;
-        uint16 confirmations; // Reduced from uint256 (supports up to 65,535 confirmations)
+        address to; // 20 bytes - slot 0
+        uint96 value; // 12 bytes - slot 0 (fits with address)
+        uint16 confirmations; // 2 bytes - slot 1
+        bool executed; // 1 byte - slot 1
+        bytes data; // 32 bytes - slot 2 (pointer to actual data)
+        string description; // 32 bytes - slot 3 (pointer to actual string)
     }
 
     // State variables
@@ -323,8 +323,11 @@ contract MultiSigWallet is ReentrancyGuard {
     function revokeConfirmation(uint256 _txId) public onlyOwners txExists(_txId) notExecuted(_txId) {
         if (!s_isConfirmed[_txId][msg.sender]) revert MultiSigWallet__TransactionNotConfirmed();
 
+        Transaction storage transaction = s_transactions[_txId];
+
         s_isConfirmed[_txId][msg.sender] = false;
-        s_transactions[_txId].confirmations -= 1;
+        transaction.confirmations -= 1;
+
         emit RevokeConfirmation(_txId, msg.sender);
     }
 
@@ -339,6 +342,7 @@ contract MultiSigWallet is ReentrancyGuard {
         if (s_isOwner[newOwner]) revert MultiSigWallet__OwnerAlreadyExist();
 
         bytes memory data = abi.encodeWithSignature("addOwner(address)", newOwner);
+
         return submitTransaction(address(this), 0, data, "Add new owner");
     }
 
@@ -387,11 +391,15 @@ contract MultiSigWallet is ReentrancyGuard {
 
         s_isOwner[ownerToRemove] = false;
 
+        address[] storage owners = s_owners;
+        uint256 length = owners.length;
         // Remove from owners array
-        for (uint256 i = 0; i < s_owners.length; i++) {
+        for (uint256 i = 0; i < length; i++) {
             if (s_owners[i] == ownerToRemove) {
-                s_owners[i] = s_owners[s_owners.length - 1];
-                s_owners.pop();
+                // Move the last element to the current position
+                owners[i] = owners[length - 1];
+                // Remove the last element
+                owners.pop();
                 break;
             }
         }
