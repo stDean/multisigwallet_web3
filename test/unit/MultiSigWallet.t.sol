@@ -748,4 +748,388 @@ contract MultiSigWalletTest is Test {
         vm.prank(confirmer);
         wallet.revokeConfirmation(txId);
     }
+
+    // OWNER MANAGEMENT TESTS
+
+    /**
+     * @notice Test that an owner can submit a transaction to add a new owner
+     * @dev Verifies that an owner can submit a transaction to add a new owner
+     */
+    function test_SubmitAddOwnerTransaction() public {
+        address owner = config.owners[0];
+        address newOwner = makeAddr("newOwner");
+
+        vm.prank(owner);
+        uint256 txId = wallet.submitAddOwnerTransaction(newOwner);
+
+        // Verify transaction was created
+        assertEq(txId, 0);
+        assertEq(wallet.getTransactionCount(), 1);
+
+        // Verify transaction details
+        MultiSigWallet.Transaction memory transaction = wallet.getTransactions(txId);
+        assertEq(transaction.to, address(wallet));
+        assertEq(transaction.value, 0);
+        assertEq(transaction.executed, false);
+        assertEq(transaction.confirmations, 1); // Auto-confirmed by submitter
+    }
+
+    /**
+     * @notice Test that submitAddOwnerTransaction reverts for zero address
+     * @dev Verifies that submitting to add a zero address owner reverts
+     */
+    function test_SubmitAddOwnerTransactionRevertsForZeroAddress() public {
+        address owner = config.owners[0];
+
+        vm.expectRevert(MultiSigWallet.MultiSigWallet__InvalidOwnerAddress.selector);
+        vm.prank(owner);
+        wallet.submitAddOwnerTransaction(address(0));
+    }
+
+    /**
+     * @notice Test that submitAddOwnerTransaction reverts for existing owner
+     * @dev Verifies that submitting to add an existing owner reverts
+     */
+    function test_SubmitAddOwnerTransactionRevertsForExistingOwner() public {
+        address owner = config.owners[0];
+        address existingOwner = config.owners[1];
+
+        vm.expectRevert(MultiSigWallet.MultiSigWallet__OwnerAlreadyExist.selector);
+        vm.prank(owner);
+        wallet.submitAddOwnerTransaction(existingOwner);
+    }
+
+    /**
+     * @notice Test that addOwner function can be called via executed transaction
+     * @dev Verifies that the addOwner function works when called via an executed transaction
+     */
+    function test_AddOwnerViaExecutedTransaction() public {
+        address submitter = config.owners[0];
+        address confirmer = config.owners[1];
+        address executor = config.owners[2];
+        address newOwner = makeAddr("newOwner");
+
+        // Submit transaction to add owner
+        vm.prank(submitter);
+        uint256 txId = wallet.submitAddOwnerTransaction(newOwner);
+
+        // Confirm by enough owners to meet threshold
+        vm.prank(confirmer);
+        wallet.confirmTransaction(txId);
+
+        // Execute the transaction
+        vm.prank(executor);
+        wallet.executeTransaction(txId);
+
+        // Verify new owner was added
+        assertTrue(wallet.getIsWalletOwner(newOwner));
+        assertEq(wallet.getOwners().length, 4); // Original 3 + new owner
+    }
+
+    /**
+     * @notice Test that addOwner reverts when not called via executed transaction
+     * @dev Verifies that addOwner can only be called by the wallet itself
+     */
+    function test_AddOwnerRevertsWhenNotCalledViaExecutedTransaction() public {
+        address owner = config.owners[0];
+        address newOwner = makeAddr("newOwner");
+
+        vm.expectRevert(MultiSigWallet.MultiSigWallet__OnlyCallableViaExecutedTransaction.selector);
+        vm.prank(owner);
+        wallet.addOwner(newOwner);
+    }
+
+    /**
+     * @notice Test that an owner can submit a transaction to remove an owner
+     * @dev Verifies that an owner can submit a transaction to remove an owner
+     */
+    function test_SubmitRemoveOwnerTransaction() public {
+        address owner = config.owners[0];
+        address ownerToRemove = config.owners[1];
+
+        vm.prank(owner);
+        uint256 txId = wallet.submitRemoveOwnerTransaction(ownerToRemove);
+
+        // Verify transaction was created
+        assertEq(txId, 0);
+        assertEq(wallet.getTransactionCount(), 1);
+
+        // Verify transaction details
+        MultiSigWallet.Transaction memory transaction = wallet.getTransactions(txId);
+        assertEq(transaction.to, address(wallet));
+        assertEq(transaction.value, 0);
+        assertEq(transaction.executed, false);
+        assertEq(transaction.confirmations, 1); // Auto-confirmed by submitter
+    }
+
+    /**
+     * @notice Test that submitRemoveOwnerTransaction reverts for non-owner
+     * @dev Verifies that submitting to remove a non-owner reverts
+     */
+    function test_SubmitRemoveOwnerTransactionRevertsForNonOwner() public {
+        address owner = config.owners[0];
+        address nonOwnerAddress = makeAddr("nonOwner");
+
+        vm.expectRevert(MultiSigWallet.MultiSigWallet__NotAnOwner.selector);
+        vm.prank(owner);
+        wallet.submitRemoveOwnerTransaction(nonOwnerAddress);
+    }
+
+    /**
+     * @notice Test that submitRemoveOwnerTransaction reverts when trying to remove last owner
+     * @dev Verifies that submitting to remove the last owner reverts
+     */
+    function test_SubmitRemoveOwnerTransactionRevertsForLastOwner() public {
+        // Create a wallet with only 2 owners
+        address[] memory owners = new address[](2);
+        owners[0] = config.owners[0];
+        owners[1] = config.owners[1];
+
+        MultiSigWallet testWallet = new MultiSigWallet(owners, 1);
+
+        // Submit transaction to remove one owner (leaving 1 owner)
+        vm.prank(owners[0]);
+        uint256 txId = testWallet.submitRemoveOwnerTransaction(owners[1]);
+
+        // Execute the transaction (should work, now we have 1 owner)
+        vm.prank(owners[0]);
+        testWallet.executeTransaction(txId);
+
+        assertEq(testWallet.getOwners().length, 1);
+
+        // // Execute the transaction - should revert
+        vm.expectRevert(MultiSigWallet.MultiSigWallet__CannotRemoveLastOwner.selector);
+        vm.prank(owners[0]);
+        testWallet.submitRemoveOwnerTransaction(owners[0]);
+    }
+
+    /**
+     * @notice Test that removeOwner function can be called via executed transaction
+     * @dev Verifies that the removeOwner function works when called via an executed transaction
+     */
+    function test_RemoveOwnerViaExecutedTransaction() public {
+        address submitter = config.owners[0];
+        address confirmer = config.owners[1];
+        address executor = config.owners[2];
+        address ownerToRemove = config.owners[1];
+
+        // Submit transaction to remove owner
+        vm.prank(submitter);
+        uint256 txId = wallet.submitRemoveOwnerTransaction(ownerToRemove);
+
+        // Confirm by enough owners to meet threshold
+        vm.prank(confirmer);
+        wallet.confirmTransaction(txId);
+
+        // Execute the transaction
+        vm.prank(executor);
+        wallet.executeTransaction(txId);
+
+        // Verify owner was removed
+        assertFalse(wallet.getIsWalletOwner(ownerToRemove));
+        assertEq(wallet.getOwners().length, 2); // Original 3 - 1
+    }
+
+    /**
+     * @notice Test that removeOwner reverts when not called via executed transaction
+     * @dev Verifies that removeOwner can only be called by the wallet itself
+     */
+    function test_RemoveOwnerRevertsWhenNotCalledViaExecutedTransaction() public {
+        address owner = config.owners[0];
+        address ownerToRemove = config.owners[1];
+
+        vm.expectRevert(MultiSigWallet.MultiSigWallet__OnlyCallableViaExecutedTransaction.selector);
+        vm.prank(owner);
+        wallet.removeOwner(ownerToRemove);
+    }
+
+    /**
+     * @notice Test that removeOwner reverts when trying to remove non-existent owner
+     * @dev Verifies that removeOwner reverts when trying to remove an address that is not an owner
+     */
+    function test_RemoveOwnerRevertsWhenNotAnOwner() public {
+        address executor = config.owners[2];
+        address nonOwnerAddress = makeAddr("nonOwnerAddress");
+
+        // Try to execute (should revert)
+        vm.expectRevert(MultiSigWallet.MultiSigWallet__NotAnOwner.selector);
+        vm.prank(executor);
+        wallet.submitRemoveOwnerTransaction(nonOwnerAddress);
+    }
+
+    /**
+     * @notice Test that an owner can submit a transaction to change the threshold
+     * @dev Verifies that an owner can submit a transaction to change the threshold
+     */
+    function test_SubmitChangeThresholdTransaction() public {
+        address owner = config.owners[0];
+        uint256 newThreshold = 3;
+
+        vm.prank(owner);
+        uint256 txId = wallet.submitChangeThresholdTransaction(newThreshold);
+
+        // Verify transaction was created
+        assertEq(txId, 0);
+        assertEq(wallet.getTransactionCount(), 1);
+
+        // Verify transaction details
+        MultiSigWallet.Transaction memory transaction = wallet.getTransactions(txId);
+        assertEq(transaction.to, address(wallet));
+        assertEq(transaction.value, 0);
+        assertEq(transaction.executed, false);
+        assertEq(transaction.confirmations, 1); // Auto-confirmed by submitter
+    }
+
+    /**
+     * @notice Test that submitChangeThresholdTransaction reverts for invalid threshold
+     * @dev Verifies that submitting an invalid threshold reverts
+     */
+    function test_SubmitChangeThresholdTransactionRevertsForInvalidThreshold() public {
+        address owner = config.owners[0];
+
+        // Threshold too low
+        vm.expectRevert(MultiSigWallet.MultiSigWallet__InvalidThreshold.selector);
+        vm.prank(owner);
+        wallet.submitChangeThresholdTransaction(0);
+
+        // Threshold too high
+        vm.expectRevert(MultiSigWallet.MultiSigWallet__InvalidThreshold.selector);
+        vm.prank(owner);
+        wallet.submitChangeThresholdTransaction(4); // Only 3 owners
+    }
+
+    /**
+     * @notice Test that changeThreshold function can be called via executed transaction
+     * @dev Verifies that the changeThreshold function works when called via an executed transaction
+     */
+    function test_ChangeThresholdViaExecutedTransaction() public {
+        address submitter = config.owners[0];
+        address confirmer = config.owners[1];
+        address executor = config.owners[2];
+        uint256 newThreshold = 3;
+
+        // Submit transaction to change threshold
+        vm.prank(submitter);
+        uint256 txId = wallet.submitChangeThresholdTransaction(newThreshold);
+
+        // Confirm by enough owners to meet threshold
+        vm.prank(confirmer);
+        wallet.confirmTransaction(txId);
+
+        // Execute the transaction
+        vm.prank(executor);
+        wallet.executeTransaction(txId);
+
+        // Verify threshold was changed
+        assertEq(wallet.getThreshold(), newThreshold);
+    }
+
+    /**
+     * @notice Test that changeThreshold reverts when not called via executed transaction
+     * @dev Verifies that changeThreshold can only be called by the wallet itself
+     */
+    function test_ChangeThresholdRevertsWhenNotCalledViaExecutedTransaction() public {
+        address owner = config.owners[0];
+        uint256 newThreshold = 3;
+
+        vm.expectRevert(MultiSigWallet.MultiSigWallet__OnlyCallableViaExecutedTransaction.selector);
+        vm.prank(owner);
+        wallet.changeThreshold(newThreshold);
+    }
+
+    // RECEIVE FUNCTION TESTS
+
+    /**
+     * @notice Test that the wallet can receive ETH
+     * @dev Verifies that the wallet can receive ETH and emits the Deposit event
+     */
+    function test_ReceiveEther() public {
+        uint256 depositAmount = 1 ether;
+        address depositor = makeAddr("depositor");
+
+        vm.deal(depositor, depositAmount);
+
+        vm.expectEmit(true, true, true, true);
+        emit MultiSigWallet.Deposit(depositor, depositAmount, depositAmount);
+
+        vm.prank(depositor);
+        (bool success,) = address(wallet).call{value: depositAmount}("");
+
+        assertTrue(success);
+        assertEq(address(wallet).balance, depositAmount);
+    }
+
+    /**
+     * @notice Test that the wallet balance increases when receiving ETH
+     * @dev Verifies that the wallet balance increases correctly when receiving ETH
+     */
+    function test_ReceiveEtherIncreasesBalance() public {
+        uint256 initialBalance = address(wallet).balance;
+        uint256 depositAmount = 1 ether;
+        address depositor = makeAddr("depositor");
+
+        vm.deal(depositor, depositAmount);
+
+        vm.prank(depositor);
+        (bool success,) = address(wallet).call{value: depositAmount}("");
+
+        assertTrue(success);
+        assertEq(address(wallet).balance, initialBalance + depositAmount);
+    }
+
+    // EXECUTION NONCE TESTS
+
+    /**
+     * @notice Test that executeTransaction increments execution nonce
+     * @dev Verifies that the execution nonce is incremented for the executor
+     */
+    function test_ExecutionNonceTracking() public {
+        address submitter = config.owners[0];
+        address confirmer = config.owners[1];
+        address executor = config.owners[2];
+
+        // Fund the wallet for both transactions
+        vm.deal(address(wallet), 2 * testValue);
+
+        // Submit and confirm a transaction
+        vm.prank(submitter);
+        uint256 txId = wallet.submitTransaction(recipient, testValue, testData, testDescription);
+
+        vm.prank(confirmer);
+        wallet.confirmTransaction(txId);
+
+        // Check initial nonce
+        uint256 initialNonce = wallet.getExecutionNonce(executor);
+
+        // Execute the transaction
+        vm.prank(executor);
+        wallet.executeTransaction(txId);
+
+        // Verify nonce was incremented
+        assertEq(wallet.getExecutionNonce(executor), initialNonce + 1);
+
+        // Submit and confirm another transaction
+        vm.prank(submitter);
+        uint256 txId2 = wallet.submitTransaction(recipient, testValue, testData, testDescription);
+
+        vm.prank(confirmer);
+        wallet.confirmTransaction(txId2);
+
+        // Execute the second transaction
+        vm.prank(executor);
+        wallet.executeTransaction(txId2);
+
+        // Verify nonce was incremented again
+        assertEq(wallet.getExecutionNonce(executor), initialNonce + 2);
+    }
+
+    /**
+     * @notice Test that execution nonce is zero for addresses that haven't executed
+     * @dev Verifies that the execution nonce is zero for addresses that haven't executed any transactions
+     */
+    function test_ExecutionNonceZeroForNonExecutors() public {
+        address nonExecutor = makeAddr("nonExecutor");
+
+        assertEq(wallet.getExecutionNonce(nonExecutor), 0);
+    }
 }

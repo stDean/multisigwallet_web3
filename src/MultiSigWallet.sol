@@ -35,9 +35,9 @@ contract MultiSigWallet is ReentrancyGuard {
     // State variables
     address[] private s_owners;
     mapping(address => bool) private s_isOwner;
-    uint256 private immutable i_threshold;
+    uint256 private s_threshold;
     uint256 private s_transactionCount;
-    // Removed s_requiredConfirmations as it's redundant with i_threshold
+    // Removed s_requiredConfirmations as it's redundant with s_threshold
     // Removed s_executionNonce as it's not used in the current implementation
 
     // Mappings
@@ -100,6 +100,9 @@ contract MultiSigWallet is ReentrancyGuard {
      * @param newOwner Address of new owner to be added
      */
     event OwnerAdded(address indexed newOwner);
+
+    event OwnerRemoved(address indexed removedOwner);
+    event ThresholdChanged(uint256 newThreshold);
 
     // Errors
     /// @dev Error thrown when no owners are provided during initialization
@@ -218,7 +221,7 @@ contract MultiSigWallet is ReentrancyGuard {
             s_owners.push(owner);
         }
 
-        i_threshold = _threshold;
+        s_threshold = _threshold;
     }
 
     // MAIN FUNCTIONS
@@ -290,7 +293,7 @@ contract MultiSigWallet is ReentrancyGuard {
      */
     function executeTransaction(uint256 _txId) public nonReentrant onlyOwners txExists(_txId) notExecuted(_txId) {
         Transaction storage transaction = s_transactions[_txId];
-        if (transaction.confirmations < i_threshold) {
+        if (transaction.confirmations < s_threshold) {
             revert MultiSigWallet__CannotExecuteTransactionWithoutEnoughConfirmations();
         }
 
@@ -371,6 +374,32 @@ contract MultiSigWallet is ReentrancyGuard {
     }
 
     /**
+     * @notice Remove an owner
+     * @dev This function should be called via a multisig transaction
+     * @param ownerToRemove Address of the owner to remove
+     */
+    function removeOwner(address ownerToRemove) external {
+        // Only allow self-call (via executed transaction)
+        if (msg.sender != address(this)) revert MultiSigWallet__OnlyCallableViaExecutedTransaction();
+        if (!s_isOwner[ownerToRemove]) revert MultiSigWallet__NotAnOwner();
+        if (s_owners.length < 1) revert MultiSigWallet__CannotRemoveLastOwner();
+        if (s_threshold > s_owners.length - 1) revert MultiSigWallet__InvalidThreshold();
+
+        s_isOwner[ownerToRemove] = false;
+
+        // Remove from owners array
+        for (uint256 i = 0; i < s_owners.length; i++) {
+            if (s_owners[i] == ownerToRemove) {
+                s_owners[i] = s_owners[s_owners.length - 1];
+                s_owners.pop();
+                break;
+            }
+        }
+
+        emit OwnerRemoved(ownerToRemove);
+    }
+
+    /**
      * @notice Submit a transaction to change the threshold
      * @dev Creates a transaction that will change the threshold when executed
      * @param newThreshold New threshold value
@@ -381,6 +410,20 @@ contract MultiSigWallet is ReentrancyGuard {
 
         bytes memory data = abi.encodeWithSignature("changeThreshold(uint256)", newThreshold);
         return submitTransaction(address(this), 0, data, "Change threshold");
+    }
+
+    /**
+     * @notice Change the threshold
+     * @dev This function should be called via a multisig transaction
+     * @param newThreshold New threshold value
+     */
+    function changeThreshold(uint256 newThreshold) external {
+        // Only allow self-call (via executed transaction)
+        if (msg.sender != address(this)) revert MultiSigWallet__OnlyCallableViaExecutedTransaction();
+        if (newThreshold < 1 || newThreshold > s_owners.length) revert MultiSigWallet__InvalidThreshold();
+
+        s_threshold = newThreshold;
+        emit ThresholdChanged(newThreshold);
     }
 
     // GETTER FUNCTIONS AND HELPERS
@@ -400,7 +443,7 @@ contract MultiSigWallet is ReentrancyGuard {
      * @return Current threshold value
      */
     function getThreshold() external view returns (uint256) {
-        return i_threshold;
+        return s_threshold;
     }
 
     /**
