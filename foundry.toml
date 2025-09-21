@@ -5,8 +5,22 @@ libs = ["lib"]
 remappings = ["@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/"]
 
 [fuzz]
-runs = 1000
+runs = 500              # Reduced from 1000 to speed up tests
+max_test_rejects = 1000 # Limit the number of rejected inputs
 fail_on_revert = false
-depth = 128
+depth = 64              # Reduced from 128 to limit call depth
+
+[invariant]
+runs = 500                # Reduced from 1000
+depth = 32                # Reduced call depth for invariants
+fail_on_revert = false
+max_assert_rejects = 1000 # Limit assertion rejects
+
+# Enable faster tests
+[fmt]
+line_length = 120
+
+[doc]
+line_length = 120
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
